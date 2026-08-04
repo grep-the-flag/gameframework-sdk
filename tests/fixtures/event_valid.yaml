@@ -1,0 +1,35 @@
+schema_version: 1
+contract: ">=0.1,<1.0"
+id: demo-heist
+version: 0.1.0
+name: {en: The Demo Heist, de: Der Demo-Coup}
+story: {en: "One continuous story text — no chapters."}   # lang map, single text
+scoring: challenge                 # casual | challenge
+unlock_mode: manual                # manual | guided
+theme: default                     # optional; built-in default theme, or a registry theme id
+challenges:
+  - id: entry
+    order: 1
+    title: {en: Break In}
+    text: {en: Find the door.}
+    minigame: {id: slide-puzzle, version: ">=1.0,<2.0"}
+    points: 100
+    hint_cost: 10                  # optional, default 0
+    hint_cap: 50                   # optional, default = points
+    depends_on: []                 # explicit deps; reward chain adds implicit ones
+    rewards:
+      # name + type come from slide-puzzle's own manifest produces slot (§8.1);
+      # its second produces slot, slide_puzzle_solution_flag, is deliberately
+      # left unwired — this event has no use for a plain flag (§3.2)
+      produces: [{name: player_ssh_keypair, type: ssh_keypair}]
+      consumes: []
+  - id: escalate
+    order: 2
+    title: {en: Own the Box}
+    text: {en: Use what you found.}
+    minigame: {id: writable-cron-job, version: ">=1.0,<2.0"}
+    points: 200
+    depends_on: []                 # implicit dep on "entry" via player_ssh_keypair
+    rewards:
+      produces: [{name: cron_flag_token, type: token}]
+      consumes: [{name: player_ssh_keypair}]
