@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grep-the-flag.github.io/gameframework-sdk/event.schema.json",
+  "title": "event.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract", "id", "version", "name", "story", "scoring", "unlock_mode", "challenges"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+    "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?(\\+[0-9A-Za-z-.]+)?$"},
+    "name": {"$ref": "#/$defs/langMap"},
+    "story": {"$ref": "#/$defs/langMap"},
+    "scoring": {"enum": ["casual", "challenge"]},
+    "unlock_mode": {"enum": ["manual", "guided"]},
+    "theme": {"type": "string", "minLength": 1},
+    "challenges": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "order", "title", "text", "minigame", "points"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+          "order": {"type": "integer", "minimum": 1},
+          "title": {"$ref": "#/$defs/langMap"},
+          "text": {"$ref": "#/$defs/langMap"},
+          "minigame": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+              "version": {"type": "string", "minLength": 1}
+            }
+          },
+          "points": {"type": "integer", "minimum": 0},
+          "hint_cost": {"type": "integer", "minimum": 0},
+          "hint_cap": {"type": "integer", "minimum": 0},
+          "depends_on": {"type": "array", "items": {"type": "string"}},
+          "rewards": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "produces": {"type": "array", "items": {"$ref": "#/$defs/rewardDecl"}},
+              "consumes": {"type": "array", "items": {"$ref": "#/$defs/rewardConsumeDecl"}}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "langMap": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "rewardDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,62}$"},
+        "type": {"enum": ["ssh_keypair", "password", "token", "ssl_cert"]}
+      }
+    },
+    "rewardConsumeDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,62}$"}
+      }
+    }
+  }
+}
