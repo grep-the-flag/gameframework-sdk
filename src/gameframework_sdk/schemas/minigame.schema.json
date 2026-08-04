@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grep-the-flag.github.io/gameframework-sdk/minigame.schema.json",
+  "title": "minigame.yaml",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract", "id", "version", "name", "description", "image", "http", "resources"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract": {"type": "string", "minLength": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+    "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?(\\+[0-9A-Za-z-.]+)?$"},
+    "name": {"$ref": "#/$defs/langMap"},
+    "description": {"$ref": "#/$defs/langMap"},
+    "image": {"type": "string", "pattern": "^ghcr\\.io/[a-z0-9-]+/[a-z0-9-]+$"},
+    "http": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {"port": {"$ref": "#/$defs/port"}}
+    },
+    "tcp_ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["port", "protocol"],
+        "properties": {
+          "port": {"$ref": "#/$defs/port"},
+          "protocol": {"const": "tcp"},
+          "description": {"$ref": "#/$defs/langMap"}
+        }
+      }
+    },
+    "rewards": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "consumes": {"type": "array", "items": {"$ref": "#/$defs/rewardDecl"}},
+        "produces": {"type": "array", "items": {"$ref": "#/$defs/rewardDecl"}}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory"],
+      "properties": {
+        "cpu": {"type": "string", "pattern": "^\\d+(\\.\\d+)?$"},
+        "memory": {"type": "string", "pattern": "^\\d+[KMG]?$"}
+      }
+    }
+  },
+  "$defs": {
+    "langMap": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "rewardDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,62}$"},
+        "type": {"enum": ["ssh_keypair", "password", "token", "ssl_cert"]}
+      }
+    }
+  }
+}

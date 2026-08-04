@@ -1,0 +1,25 @@
+schema_version: 1
+contract: ">=0.1,<1.0"
+id: writable-cron-job
+version: 1.0.0
+name: {en: Writable Cron Job, de: Beschreibbarer Cron-Job}
+description:
+  en: Escalate privileges through a world-writable maintenance script executed by cron.
+  de: Erweitere deine Rechte über ein beschreibbares Wartungsskript, das von Cron ausgeführt wird.
+image: ghcr.io/grep-the-flag/minigame-writable-cron-job
+http:
+  port: 8000                       # contract endpoints + the flag-submission surface
+tcp_ports:
+  - port: 22                       # sshd, container port
+    protocol: tcp
+    description: {en: SSH access for players, de: SSH-Zugang für Spieler}
+rewards:
+  consumes:
+    - name: player_ssh_keypair
+      type: ssh_keypair
+  produces:
+    - name: cron_flag_token
+      type: token
+resources:
+  cpu: "0.5"
+  memory: 512M
