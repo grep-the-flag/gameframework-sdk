@@ -56,7 +56,7 @@
     "langMap": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
+      "propertyNames": {"type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
       "additionalProperties": {"type": "string", "minLength": 1}
     },
     "rewardDecl": {

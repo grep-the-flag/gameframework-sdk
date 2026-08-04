@@ -83,3 +83,14 @@ def test_self_consumption_fails() -> None:
     manifest = load("event_valid.yaml")
     manifest["challenges"][0]["rewards"]["consumes"] = [{"name": "player_ssh_keypair"}]
     assert any("produced by itself" in e for e in validate_event(manifest))
+
+
+def test_yaml_norwegian_language_key_is_rejected() -> None:
+    # YAML 1.1 resolves a bare `no` key to the boolean False, so Norwegian's
+    # language code silently became a non-string key that `propertyNames`
+    # patterns do not constrain. This must go through yaml.safe_load - a dict
+    # literal cannot reproduce it.
+    manifest = load("event_valid.yaml")
+    manifest["name"] = yaml.safe_load("name: {no: Nei}")["name"]
+    assert list(manifest["name"]) == [False]  # the bug this guards against
+    assert validate_event(manifest) != []

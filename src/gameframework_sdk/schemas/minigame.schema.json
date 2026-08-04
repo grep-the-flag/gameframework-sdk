@@ -12,7 +12,7 @@
     "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?(\\+[0-9A-Za-z-.]+)?$"},
     "name": {"$ref": "#/$defs/langMap"},
     "description": {"$ref": "#/$defs/langMap"},
-    "image": {"type": "string", "pattern": "^ghcr\\.io/[a-z0-9-]+/[a-z0-9-]+$"},
+    "image": {"$ref": "#/$defs/ociImageRef"},
     "http": {
       "type": "object",
       "additionalProperties": false,
@@ -54,10 +54,15 @@
     "langMap": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
+      "propertyNames": {"type": "string", "pattern": "^[a-z]{2}(-[A-Z]{2})?$"},
       "additionalProperties": {"type": "string", "minLength": 1}
     },
     "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "ociImageRef": {
+      "description": "OCI image reference (§2.1): [registry[:port]/]path[/path...][:tag][@digest]. Path components are lowercase per the OCI distribution grammar; the registry host, tag and digest are all optional.",
+      "type": "string",
+      "pattern": "^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+(?::[0-9]+)?|[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?:[0-9]+|localhost(?::[0-9]+)?)/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@(?:sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128}))?$"
+    },
     "rewardDecl": {
       "type": "object",
       "additionalProperties": false,
