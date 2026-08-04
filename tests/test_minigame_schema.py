@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gameframework_sdk.validation import validate_minigame
@@ -55,4 +56,116 @@ def test_unknown_top_level_field_fails() -> None:
 def test_invalid_reward_type_fails() -> None:
     manifest = load("minigame_valid.yaml")
     manifest["rewards"]["produces"][0]["type"] = "flag"
+    assert validate_minigame(manifest) != []
+
+
+# --- `image`: OCI image reference (§2.1) ------------------------------------
+#
+# §1.2 makes the field tables normative and the examples illustrative. §2.1
+# constrains `image` to an "OCI image reference" and explicitly declines to
+# require a digest, noting digest pinning is planned for M6. The registry
+# host, namespace depth, tag and digest are therefore all author's choice.
+
+ACCEPTED_IMAGES = [
+    "nginx",  # bare name, no registry
+    "docker.io/library/nginx",  # registry + namespace + name
+    "ghcr.io/grep-the-flag/minigame-writable-cron-job",  # the fixture value
+    "quay.io/org/img",  # non-ghcr registry
+    "harbor.example.com:5000/team/sub/img",  # registry with port + nested namespaces
+    "ghcr.io/a/b/c/d/e",  # deeply nested namespaces
+    "ghcr.io/org/my_img",  # underscore separator
+    "registry.io/org/img__x.y-z",  # every OCI separator form
+    "ghcr.io/org/img:1.0.0",  # tag
+    "ghcr.io/org/img@sha256:" + "a" * 64,  # digest
+    "ghcr.io/org/img:1.0.0@sha256:" + "a" * 64,  # tag + digest
+    "localhost:5000/img",  # localhost registry
+]
+
+REJECTED_IMAGES = [
+    "",  # empty string
+    "   ",  # whitespace only
+    "ghcr.io/org/img ",  # trailing whitespace
+    "ghcr.io/Org/img",  # uppercase in a path component - forbidden by OCI
+    "GHCR.IO/org/IMG",  # uppercase in the name
+    "ghcr.io//img",  # empty path component
+    "/org/img",  # leading slash
+    "ghcr.io/org/-img",  # path component may not start with a separator
+    "ghcr.io/org/img:",  # empty tag
+    "ghcr.io/org/img:tag with space",  # whitespace in tag
+    "ghcr.io/org/img@sha256:zz",  # malformed digest
+    "ghcr.io/org/img@sha256:" + "a" * 63,  # digest of the wrong length
+]
+
+
+@pytest.mark.parametrize("image", ACCEPTED_IMAGES)
+def test_valid_oci_image_reference_accepted(image: str) -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["image"] = image
+    assert validate_minigame(manifest) == []
+
+
+@pytest.mark.parametrize("image", REJECTED_IMAGES)
+def test_invalid_oci_image_reference_rejected(image: str) -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["image"] = image
+    assert any("image" in e for e in validate_minigame(manifest))
+
+
+# --- §2.1 intra-document rules ----------------------------------------------
+
+
+def test_http_port_colliding_with_tcp_port_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["http"]["port"] = manifest["tcp_ports"][0]["port"]
+    assert validate_minigame(manifest) == ["http/port: port 22 is also declared in tcp_ports"]
+
+
+def test_duplicate_tcp_port_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["tcp_ports"] = [
+        {"port": 2222, "protocol": "tcp"},
+        {"port": 2222, "protocol": "tcp"},
+    ]
+    assert validate_minigame(manifest) == ["tcp_ports: duplicate port 2222"]
+
+
+def test_duplicate_produced_reward_name_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["rewards"]["produces"] = [
+        {"name": "cron_flag_token", "type": "token"},
+        {"name": "cron_flag_token", "type": "password"},
+    ]
+    assert validate_minigame(manifest) == [
+        "rewards/produces: duplicate reward name 'cron_flag_token'"
+    ]
+
+
+def test_duplicate_consumed_reward_name_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["rewards"]["consumes"] = [
+        {"name": "player_ssh_keypair", "type": "ssh_keypair"},
+        {"name": "player_ssh_keypair", "type": "password"},
+    ]
+    assert validate_minigame(manifest) == [
+        "rewards/consumes: duplicate reward name 'player_ssh_keypair'"
+    ]
+
+
+def test_manifest_without_optional_blocks_still_validates() -> None:
+    # The intra-document checks must tolerate absent `tcp_ports`/`rewards`,
+    # both optional per §2.1.
+    manifest = load("minigame_valid.yaml")
+    del manifest["tcp_ports"]
+    del manifest["rewards"]
+    assert validate_minigame(manifest) == []
+
+
+def test_yaml_norwegian_language_key_is_rejected() -> None:
+    # YAML 1.1 resolves a bare `no` key to the boolean False, so Norwegian's
+    # language code silently became a non-string key that `propertyNames`
+    # patterns do not constrain. This must go through yaml.safe_load - a dict
+    # literal cannot reproduce it.
+    manifest = yaml.safe_load((FIXTURES / "minigame_valid.yaml").read_text())
+    manifest["name"] = yaml.safe_load("name: {no: Nei}")["name"]
+    assert list(manifest["name"]) == [False]  # the bug this guards against
     assert validate_minigame(manifest) != []

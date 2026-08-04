@@ -16,17 +16,44 @@ def _schema_errors(schema_file: str, manifest: dict) -> list[str]:
     ]
 
 
-def validate_minigame(manifest: dict) -> list[str]:
-    """Validate a parsed minigame.yaml. Returns [] when valid."""
-    return _schema_errors("minigame.schema.json", manifest)
-
-
 def _duplicates(items) -> list:
     seen: set = set()
     dupes: set = set()
     for item in items:
         (dupes if item in seen else seen).add(item)
     return sorted(dupes, key=str)
+
+
+def validate_minigame(manifest: dict) -> list[str]:
+    """Validate a parsed minigame.yaml: JSON Schema + intra-document checks.
+
+    The §2.1 rules layered on top of the schema pass are the ones JSON
+    Schema cannot express: they compare sibling values against each other
+    rather than constraining a single instance location.
+
+    - `http.port` must differ from every `tcp_ports[].port`, and
+      `tcp_ports[].port` is unique within `tcp_ports` — "one port serves
+      exactly one tier".
+    - `rewards.produces[].name` and `rewards.consumes[].name` are each
+      unique within their own array. §6 makes the reward name the join key
+      between an event and this manifest, so one name bound to two types
+      would make §3.4's reward-type check nondeterministic.
+    """
+    errors = _schema_errors("minigame.schema.json", manifest)
+    if errors:
+        return errors
+
+    tcp_ports = [p["port"] for p in manifest.get("tcp_ports", [])]
+    errors += [f"tcp_ports: duplicate port {p}" for p in _duplicates(tcp_ports)]
+    http_port = manifest["http"]["port"]
+    if http_port in tcp_ports:
+        errors.append(f"http/port: port {http_port} is also declared in tcp_ports")
+
+    rewards = manifest.get("rewards", {})
+    for slot in ("consumes", "produces"):
+        names = [r["name"] for r in rewards.get(slot, [])]
+        errors += [f"rewards/{slot}: duplicate reward name '{n}'" for n in _duplicates(names)]
+    return errors
 
 
 def validate_event(manifest: dict) -> list[str]:
