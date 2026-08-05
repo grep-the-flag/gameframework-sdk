@@ -13,6 +13,21 @@
     "name": {"$ref": "#/$defs/langMap"},
     "description": {"$ref": "#/$defs/langMap"},
     "image": {"$ref": "#/$defs/ociImageRef"},
+    "isolation_mode": {
+      "description": "§2.1 (ADR-0018): `per_team` = one container instance per team, created at that team's challenge start and removed at its teardown. `shared` = one instance per event, shared by all teams - an opt-in valid only for games that can prove team isolation (§3.4 check 11); registry admission additionally refuses `shared` for privilege-escalation/arbitrary-code-execution games. The contract endpoints are identical in both modes.",
+      "enum": ["per_team", "shared"],
+      "default": "per_team"
+    },
+    "provision_identity": {
+      "description": "§2.1: `handles` = /provision carries opaque ids and framework-generated handles only. `names` = the game additionally receives team_name, players[].username and players[].display_name; declaring it is a stated data-processing capability - justified in the registry submission, visible in the event's privacy notice, covered by teardown/logging tests (ADR-0019).",
+      "enum": ["handles", "names"],
+      "default": "handles"
+    },
+    "solve_mode": {
+      "description": "§2.1/§5: how a solve reaches the framework. `flag` = the game displays a produced `token` reward and the player submits it in the framework UI, so the solver is identified. `callback` = the game detects the win itself and calls the solved callback; use it only when there is nothing to paste. A manifest declaring a non-empty tcp_ports must use `flag` (§3.4 check 12).",
+      "enum": ["flag", "callback"],
+      "default": "flag"
+    },
     "http": {
       "type": "object",
       "additionalProperties": false,

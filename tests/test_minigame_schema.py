@@ -1,8 +1,10 @@
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 
+import gameframework_sdk.validation as validation
 from gameframework_sdk.validation import validate_minigame
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -10,6 +12,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def load(name: str) -> dict:
     return yaml.safe_load((FIXTURES / name).read_text())
+
+
+def _minigame_schema() -> dict:
+    schemas = Path(validation.__file__).parent / "schemas"
+    return json.loads((schemas / "minigame.schema.json").read_text())
 
 
 def test_valid_manifest_passes() -> None:
@@ -153,10 +160,112 @@ def test_duplicate_consumed_reward_name_fails() -> None:
 
 def test_manifest_without_optional_blocks_still_validates() -> None:
     # The intra-document checks must tolerate absent `tcp_ports`/`rewards`,
-    # both optional per §2.1.
+    # both optional per §2.1. `solve_mode: callback` is what makes dropping
+    # `rewards` legal: under the default `flag` the manifest must declare the
+    # token slot it shows (§3.4 check 13).
     manifest = load("minigame_valid.yaml")
     del manifest["tcp_ports"]
     del manifest["rewards"]
+    manifest["solve_mode"] = "callback"
+    assert validate_minigame(manifest) == []
+
+
+# --- §2.1 `isolation_mode` / `provision_identity` / `solve_mode` -------------
+#
+# All three are optional with a default, and the manifest is closed
+# (`additionalProperties: false`), so a manifest that states any of them is
+# rejected outright until the schema knows the field.
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("isolation_mode", ["per_team", "shared"]),
+        ("provision_identity", ["handles", "names"]),
+        ("solve_mode", ["flag", "callback"]),
+    ],
+)
+def test_declared_enum_values_are_accepted(field: str, values: list[str]) -> None:
+    for value in values:
+        manifest = load("minigame_valid.yaml")
+        # `shared`/`callback` are illegal beside tcp_ports (§3.4 checks 11-12),
+        # which is a separate rule from "the schema knows this field".
+        del manifest["tcp_ports"]
+        manifest[field] = value
+        assert validate_minigame(manifest) == []
+
+
+@pytest.mark.parametrize("field", ["isolation_mode", "provision_identity", "solve_mode"])
+def test_unknown_enum_value_is_rejected(field: str) -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest[field] = "whatever"
+    assert any(field in e for e in validate_minigame(manifest))
+
+
+@pytest.mark.parametrize(
+    ("field", "default"),
+    [
+        ("isolation_mode", "per_team"),
+        ("provision_identity", "handles"),
+        ("solve_mode", "flag"),
+    ],
+)
+def test_schema_declares_the_contract_default(field: str, default: str) -> None:
+    # The default is normative in §2.1; the schema is where a consumer of the
+    # SDK reads it, so it must be stated rather than only implied by omission.
+    assert _minigame_schema()["properties"][field]["default"] == default
+
+
+# --- §3.4 checks 11-13 ------------------------------------------------------
+
+
+def test_shared_isolation_with_tcp_ports_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["isolation_mode"] = "shared"
+    assert validate_minigame(manifest) == [
+        "isolation_mode: 'shared' is not allowed for a minigame declaring tcp_ports"
+    ]
+
+
+def test_shared_isolation_without_tcp_ports_passes() -> None:
+    manifest = load("minigame_valid.yaml")
+    del manifest["tcp_ports"]
+    manifest["isolation_mode"] = "shared"
+    assert validate_minigame(manifest) == []
+
+
+def test_callback_solve_mode_with_tcp_ports_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["solve_mode"] = "callback"
+    assert validate_minigame(manifest) == [
+        "solve_mode: 'callback' is not allowed for a minigame declaring tcp_ports"
+    ]
+
+
+def test_flag_solve_mode_without_a_token_produces_slot_fails() -> None:
+    manifest = load("minigame_valid.yaml")
+    manifest["solve_mode"] = "flag"
+    manifest["rewards"]["produces"] = [{"name": "cron_flag_token", "type": "password"}]
+    assert validate_minigame(manifest) == [
+        "rewards/produces: solve_mode 'flag' requires at least one produces slot of type 'token'"
+    ]
+
+
+def test_default_solve_mode_without_a_token_produces_slot_fails() -> None:
+    # `flag` is the default, so the rule bites on manifests that never mention
+    # solve_mode at all.
+    manifest = load("minigame_valid.yaml")
+    del manifest["rewards"]["produces"]
+    assert validate_minigame(manifest) == [
+        "rewards/produces: solve_mode 'flag' requires at least one produces slot of type 'token'"
+    ]
+
+
+def test_callback_solve_mode_needs_no_token_produces_slot() -> None:
+    manifest = load("minigame_valid.yaml")
+    del manifest["tcp_ports"]
+    manifest["solve_mode"] = "callback"
+    manifest["rewards"]["produces"] = [{"name": "cron_flag_token", "type": "password"}]
     assert validate_minigame(manifest) == []
 
 
