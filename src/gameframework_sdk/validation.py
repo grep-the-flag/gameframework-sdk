@@ -1,7 +1,31 @@
 import json
 from importlib.resources import files
+from typing import Protocol
 
 from jsonschema import Draft202012Validator
+
+
+class MinigameResolver(Protocol):
+    """Supplies the minigame manifests referenced by an `event.yaml`.
+
+    §3.4 makes the SDK the single canonical validation pipeline, including
+    the checks that compare an event against a *referenced* manifest. Those
+    checks need a second input, and where it comes from differs per call
+    site — the registry catalog in registry CI, the local artifact store in
+    the core's import/dry-run, the working directory in an author's editor.
+    Each caller implements this interface against its own source; the
+    algorithm above it is the same one everywhere.
+    """
+
+    def resolve(self, minigame_id: str, version_range: str) -> dict | None:
+        """Return the manifest for `minigame_id` satisfying `version_range`.
+
+        Returns `None` when the source holds no such manifest — either the
+        id is unknown or no version of it satisfies the range. **The
+        resolver owns version-range matching**: §2.1 leaves the comparator
+        grammar unfixed for this draft (§7), and the source that knows which
+        versions exist is the one that can answer the question.
+        """
 
 
 def _schema(name: str) -> dict:
@@ -24,6 +48,96 @@ def _duplicates(items) -> list:
     return sorted(dupes, key=str)
 
 
+def _slot_errors(challenge: dict, minigame: dict) -> list[str]:
+    """§3.4 checks 2-4: the event's wiring against the manifest's slots.
+
+    The manifest owns the reward names in both directions (§2.1), so this
+    reads as "does the event speak the minigame's vocabulary": every wired
+    name must be a slot the manifest declares, every `consumes` slot must be
+    wired (§3.2), and a wired `produces` type must equal the declared one.
+    The converse of check 3 is deliberately absent — a `produces` slot the
+    event leaves unwired is legal and simply unused.
+    """
+    cid, mid = challenge["id"], minigame["id"]
+    wiring = challenge.get("rewards", {})
+    slots = minigame.get("rewards", {})
+    errors = []
+
+    declared = {r["name"] for r in slots.get("consumes", [])}
+    wired = {r["name"] for r in wiring.get("consumes", [])}
+    errors += [
+        f"challenges/{cid}: consumed reward '{n}' is not a consumes slot of minigame '{mid}'"
+        for n in sorted(wired - declared)
+    ]
+    errors += [
+        f"challenges/{cid}: minigame '{mid}' consumes slot '{n}' is not wired"
+        for n in sorted(declared - wired)
+    ]
+
+    produces = {r["name"]: r["type"] for r in slots.get("produces", [])}
+    for r in wiring.get("produces", []):
+        if r["name"] not in produces:
+            errors.append(
+                f"challenges/{cid}: produced reward '{r['name']}' "
+                f"is not a produces slot of minigame '{mid}'"
+            )
+        elif r["type"] != produces[r["name"]]:
+            errors.append(
+                f"challenges/{cid}: produced reward '{r['name']}' has type '{r['type']}', "
+                f"minigame '{mid}' declares '{produces[r['name']]}'"
+            )
+    return errors
+
+
+def _dependency_cycle(challenges: list[dict], produced: dict[str, str]) -> str | None:
+    """§3.4 check 10: the first cycle in the combined dependency graph.
+
+    Edges point predecessor → dependent, from both sources: an explicit
+    `depends_on` entry, and a consumed reward name resolved through
+    `produced` to the challenge that produces it. Only edges that are
+    themselves valid are added — an unknown or self-referential dependency
+    is already reported by checks 5-6, and feeding it in here would report
+    the same mistake twice under a second name.
+    """
+    ids = {c["id"] for c in challenges}
+    adjacency: dict[str, list[str]] = {c["id"]: [] for c in challenges}
+    for c in challenges:
+        cid = c["id"]
+        sources = [d for d in c.get("depends_on", []) if d in ids and d != cid]
+        sources += [
+            produced[r["name"]]
+            for r in c.get("rewards", {}).get("consumes", [])
+            if produced.get(r["name"], cid) != cid
+        ]
+        for source in sources:
+            if cid not in adjacency[source]:
+                adjacency[source].append(cid)
+
+    visited: dict[str, bool] = {}  # id -> still on the current path
+    path: list[str] = []
+
+    def walk(node: str) -> list[str] | None:
+        visited[node] = True
+        path.append(node)
+        for nxt in adjacency[node]:
+            if visited.get(nxt):
+                return path[path.index(nxt) :] + [nxt]
+            if nxt not in visited:
+                found = walk(nxt)
+                if found:
+                    return found
+        path.pop()
+        visited[node] = False
+        return None
+
+    for c in challenges:
+        if c["id"] not in visited:
+            found = walk(c["id"])
+            if found:
+                return " -> ".join(found)
+    return None
+
+
 def validate_minigame(manifest: dict) -> list[str]:
     """Validate a parsed minigame.yaml: JSON Schema + intra-document checks.
 
@@ -38,6 +152,20 @@ def validate_minigame(manifest: dict) -> list[str]:
       unique within their own array. §6 makes the reward name the join key
       between an event and this manifest, so one name bound to two types
       would make §3.4's reward-type check nondeterministic.
+
+    §3.4's checks 11-13 are here for the same reason — they read two fields
+    of this one document against each other:
+
+    - check 11: `isolation_mode: shared` is rejected beside any
+      `tcp_ports`. A shared instance can only isolate teams in its own
+      application logic, which a raw TCP tier bypasses.
+    - check 12: `solve_mode: callback` is rejected beside any `tcp_ports`.
+      A team shares one injected credential by design, so a callback from
+      an SSH box cannot say which person earned it.
+    - check 13: `solve_mode: flag` (the default) requires at least one
+      `rewards.produces[]` slot of type `token` — the flag the game shows
+      for the player to submit. Nothing else in the pipeline covers it: the
+      flag is consumed by the *framework*, not by another challenge.
     """
     errors = _schema_errors("minigame.schema.json", manifest)
     if errors:
@@ -53,24 +181,38 @@ def validate_minigame(manifest: dict) -> list[str]:
     for slot in ("consumes", "produces"):
         names = [r["name"] for r in rewards.get(slot, [])]
         errors += [f"rewards/{slot}: duplicate reward name '{n}'" for n in _duplicates(names)]
+
+    if tcp_ports and manifest.get("isolation_mode", "per_team") == "shared":
+        errors.append("isolation_mode: 'shared' is not allowed for a minigame declaring tcp_ports")
+
+    solve_mode = manifest.get("solve_mode", "flag")
+    if tcp_ports and solve_mode == "callback":
+        errors.append("solve_mode: 'callback' is not allowed for a minigame declaring tcp_ports")
+    if solve_mode == "flag" and not any(r["type"] == "token" for r in rewards.get("produces", [])):
+        errors.append(
+            "rewards/produces: solve_mode 'flag' requires at least one "
+            "produces slot of type 'token'"
+        )
     return errors
 
 
-def validate_event(manifest: dict) -> list[str]:
+def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> list[str]:
     """Validate a parsed event.yaml: JSON Schema + referential checks.
 
-    Referential checks 1-4 of sdk-contract-v1.md §3.4 (resolving
-    `challenges[].minigame.id`/`.version` and reward slot names/types
-    against the *referenced minigame manifest*) are out of scope here: they
-    compare this document against another one, and M1 has no minigame
-    registry to resolve against. They require a second input this
-    function's signature does not take.
+    Cycle detection over the combined explicit and reward-derived
+    dependency edges (sdk-contract-v1.md §3.4 check 10) happens here. Both
+    edge sets are fully determined by this one document: `depends_on` gives
+    the explicit edges, and a consumed reward name maps to its producing
+    challenge (check 5) to give the derived ones. Only the first cycle
+    found is reported — a cycle makes the rest of the graph's ordering
+    meaningless, so listing more of them helps nobody.
 
-    DAG cycle detection over the combined explicit and reward-derived
-    dependency edges (§3.4 check 10) is intentionally not done here either
-    — it lands with the core's import pipeline in M2, where both edge sets
-    exist as rows; the SDK validators see one document at a time and cannot
-    build the derived edges.
+    Referential checks 1-4 (resolving `challenges[].minigame.id`/`.version`
+    and reward slot names/types against the *referenced minigame manifest*)
+    need a second document, which arrives through `resolver` — see
+    `MinigameResolver`. Without one they are skipped and every other check
+    still runs, because an author editing an `event.yaml` with no catalog
+    at hand should still get the rest of the pipeline.
     """
     errors = _schema_errors("event.schema.json", manifest)
     if errors:
@@ -108,4 +250,20 @@ def validate_event(manifest: dict) -> list[str]:
                 )
             elif produced[name] == c["id"]:
                 errors.append(f"challenges/{c['id']}: consumed reward '{name}' produced by itself")
+
+    if resolver is not None:
+        for c in challenges:
+            ref = c["minigame"]
+            referenced = resolver.resolve(ref["id"], ref["version"])
+            if referenced is None:
+                errors.append(
+                    f"challenges/{c['id']}: minigame '{ref['id']}' '{ref['version']}' "
+                    "does not resolve to a manifest"
+                )
+            else:
+                errors += _slot_errors(c, referenced)
+
+    cycle = _dependency_cycle(challenges, produced)
+    if cycle:
+        errors.append(f"challenges: dependency cycle {cycle}")
     return errors
