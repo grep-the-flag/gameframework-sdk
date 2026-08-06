@@ -247,6 +247,155 @@ def test_produced_reward_type_mismatch_fails() -> None:
     ]
 
 
+# --- §3.4 check 13: access placeholders in `story` and `challenges[].text`.
+# The grammar half runs without a resolver; the half that needs the
+# referenced manifest's `tcp_ports` is skipped with the other resolver
+# checks.
+
+SSH_GAME = {
+    "id": "writable-cron-job",
+    "version": "1.0.0",
+    "tcp_ports": [{"port": 22, "protocol": "tcp"}],
+    "rewards": {
+        "consumes": [{"name": "player_ssh_keypair", "type": "ssh_keypair"}],
+        "produces": [{"name": "cron_flag_token", "type": "token"}],
+    },
+}
+
+TWO_PORT_GAME = {
+    **SSH_GAME,
+    "tcp_ports": [{"port": 22, "protocol": "tcp"}, {"port": 8022, "protocol": "tcp"}],
+}
+
+
+def with_text(challenge_text: str | None = None, story: str | None = None) -> dict:
+    """`event_valid.yaml` with the escalate challenge's text and/or story set."""
+    manifest = load("event_valid.yaml")
+    if challenge_text is not None:
+        manifest["challenges"][1]["text"] = {"en": challenge_text}
+    if story is not None:
+        manifest["story"] = {"en": story}
+    return manifest
+
+
+def test_short_placeholder_in_challenge_text_passes() -> None:
+    manifest = with_text("ssh {{player.handle}}@{{minigame.host}} -p {{minigame.port}}")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, SSH_GAME)) == []
+
+
+def test_qualified_placeholder_in_story_passes() -> None:
+    manifest = with_text(story="The box waits at {{minigame.writable-cron-job.port}}.")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, SSH_GAME)) == []
+
+
+def test_team_handle_placeholder_passes() -> None:
+    manifest = with_text("Your team is {{team.handle}}.")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, SSH_GAME)) == []
+
+
+def test_unknown_variable_name_fails() -> None:
+    manifest = with_text("Connect as {{player.name}}.")
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/en: unknown placeholder '{{player.name}}'"
+    ]
+
+
+def test_unterminated_placeholder_fails() -> None:
+    manifest = with_text("Connect to {{minigame.port and hope.")
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/en: unterminated placeholder '{{minigame.port and hope.'"
+    ]
+
+
+def test_whitespace_inside_delimiters_fails() -> None:
+    manifest = with_text("Port {{ minigame.port }}.")
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/en: unknown placeholder '{{ minigame.port }}'"
+    ]
+
+
+def test_short_form_in_story_fails() -> None:
+    # The story belongs to no challenge, so there is no minigame to imply.
+    manifest = with_text(story="Head for port {{minigame.port}}.")
+    assert validate_event(manifest) == [
+        "story/en: placeholder '{{minigame.port}}' must name its minigame — "
+        "the story has no challenge scope"
+    ]
+
+
+def test_placeholder_naming_a_minigame_the_event_does_not_use_fails() -> None:
+    manifest = with_text("Port {{minigame.no-such-game.port}}.")
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/en: placeholder '{{minigame.no-such-game.port}}' names "
+        "minigame 'no-such-game', which no challenge in this event references"
+    ]
+
+
+def test_every_language_of_a_map_is_checked() -> None:
+    # A placeholder correct in `en` and misspelled in `de` breaks the text for
+    # German-speaking players only — exactly what a validator is for.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][1]["text"] = {
+        "en": "Port {{minigame.port}}.",
+        "de": "Port {{minigame.prot}}.",
+    }
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/de: unknown placeholder '{{minigame.prot}}'"
+    ]
+
+
+def test_port_placeholder_against_a_game_without_tcp_ports_fails() -> None:
+    manifest = with_text("Port {{minigame.port}}.")
+    assert validate_event(manifest, resolver=resolver()) == [
+        "challenges/escalate/text/en: placeholder '{{minigame.port}}' reads a port, but "
+        "minigame 'writable-cron-job' declares no tcp_ports"
+    ]
+
+
+def test_short_port_form_against_a_multi_port_game_fails() -> None:
+    manifest = with_text("Port {{minigame.port}}.")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, TWO_PORT_GAME)) == [
+        "challenges/escalate/text/en: placeholder '{{minigame.port}}' is ambiguous — "
+        "minigame 'writable-cron-job' declares container ports 22, 8022"
+    ]
+
+
+def test_indexed_port_form_against_a_multi_port_game_passes() -> None:
+    manifest = with_text("Player {{minigame.port.22}}, admin {{minigame.port.8022}}.")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, TWO_PORT_GAME)) == []
+
+
+def test_undeclared_container_port_fails() -> None:
+    manifest = with_text("Port {{minigame.port.2222}}.")
+    assert validate_event(manifest, resolver=resolver(SLIDE_PUZZLE, SSH_GAME)) == [
+        "challenges/escalate/text/en: placeholder '{{minigame.port.2222}}' names container "
+        "port 2222, which minigame 'writable-cron-job' does not declare"
+    ]
+
+
+def test_host_placeholder_needs_no_tcp_ports() -> None:
+    # `host` is the installation's player-network address; it does not depend
+    # on the game declaring a TCP tier.
+    manifest = with_text("The box is at {{minigame.host}}.")
+    assert validate_event(manifest, resolver=resolver()) == []
+
+
+def test_minigame_named_port_cannot_be_addressed_in_the_qualified_form() -> None:
+    # `host`/`port` in that position are always the attribute, so a game whose
+    # id is literally `port` is unaddressable — said out loud rather than
+    # resolved silently.
+    manifest = with_text("Port {{minigame.port.host}}.")
+    assert validate_event(manifest) == [
+        "challenges/escalate/text/en: unknown placeholder '{{minigame.port.host}}'"
+    ]
+
+
+def test_port_checks_are_skipped_without_a_resolver() -> None:
+    # Same rule as checks 1-4: no catalog at hand, the rest still runs.
+    manifest = with_text("Port {{minigame.port.2222}}.")
+    assert validate_event(manifest) == []
+
+
 def test_yaml_norwegian_language_key_is_rejected() -> None:
     # YAML 1.1 resolves a bare `no` key to the boolean False, so Norwegian's
     # language code silently became a non-string key that `propertyNames`

@@ -138,6 +138,142 @@ def _dependency_cycle(challenges: list[dict], produced: dict[str, str]) -> str |
     return None
 
 
+def _placeholders(text: str):
+    """Yield every `{{...}}` in `text` as `(raw, body)`.
+
+    An unterminated `{{` yields `(rest_of_text, None)` and ends the scan:
+    once a delimiter is unbalanced, everything after it is one unparsable
+    run, and reporting each following brace pair separately would bury the
+    real mistake under its consequences.
+    """
+    index = 0
+    while True:
+        start = text.find("{{", index)
+        if start < 0:
+            return
+        end = text.find("}}", start + 2)
+        if end < 0:
+            yield text[start:], None
+            return
+        yield text[start : end + 2], text[start + 2 : end]
+        index = end + 2
+
+
+def _parse_reference(body: str) -> tuple[str | None, str, int | None] | None:
+    """Parse a placeholder body into `(minigame_id, attribute, container_port)`.
+
+    `minigame_id` is `None` for the short form, which the caller resolves
+    against the challenge the text belongs to; `attribute` is empty for the
+    player/team variables, which need no resolution at all. Returns `None`
+    for anything the grammar does not define — including whitespace inside
+    the delimiters, so that one spelling is the only spelling.
+
+    The segment after `minigame` is the attribute when it is exactly `host`
+    or `port`, and a minigame id otherwise. A game whose id is literally
+    `host` or `port` is therefore unaddressable in the qualified form; that
+    falls out as an unknown placeholder rather than a silent guess.
+    """
+    if body in ("player.handle", "team.handle"):
+        return None, "", None
+
+    parts = body.split(".")
+    if parts[0] != "minigame":
+        return None
+    rest = parts[1:]
+
+    minigame_id = None
+    if rest and rest[0] not in ("host", "port"):
+        minigame_id, rest = rest[0], rest[1:]
+    if not rest or rest[0] not in ("host", "port"):
+        return None
+    attribute, rest = rest[0], rest[1:]
+
+    if not rest:
+        return minigame_id, attribute, None
+    if attribute != "port" or len(rest) != 1 or not rest[0].isdigit():
+        return None
+    return minigame_id, attribute, int(rest[0])
+
+
+def _placeholder_errors(
+    manifest: dict, challenges: list[dict], resolved: dict[str, dict]
+) -> list[str]:
+    """§3.4 check 13: access placeholders in `story` and `challenges[].text`.
+
+    A host port is allocated when the run is created, long after these texts
+    were written (§4.1), so the text carries a placeholder and the framework
+    substitutes it per team as it serves it. **Every language of every map**
+    is checked: a placeholder correct in `en` and misspelled in `de` is a
+    broken text for German-speaking players only.
+
+    The short form `{{minigame.port}}` is accepted only in a challenge text,
+    where that challenge's own `minigame.id` is the scope — check 9 keeps
+    the reference unique within the event, so it has exactly one meaning.
+    The story belongs to no challenge and must name its minigame.
+
+    The half that needs the referenced manifest's `tcp_ports` — whether
+    there is a port to publish at all, and whether a container-port suffix
+    is required or valid — is skipped when no manifest was resolved,
+    exactly as checks 1-4 are.
+    """
+    event_minigames = {c["minigame"]["id"] for c in challenges}
+    texts: list[tuple[str, dict, str | None]] = [("story", manifest["story"], None)]
+    texts += [(f"challenges/{c['id']}/text", c["text"], c["minigame"]["id"]) for c in challenges]
+
+    errors = []
+    for where, language_map, scope in texts:
+        for language, text in language_map.items():
+            at = f"{where}/{language}"
+            for raw, body in _placeholders(text):
+                if body is None:
+                    errors.append(f"{at}: unterminated placeholder '{raw}'")
+                    continue
+                reference = _parse_reference(body)
+                if reference is None:
+                    errors.append(f"{at}: unknown placeholder '{raw}'")
+                    continue
+
+                minigame_id, attribute, container_port = reference
+                if not attribute:  # player.handle / team.handle
+                    continue
+                if minigame_id is None:
+                    if scope is None:
+                        errors.append(
+                            f"{at}: placeholder '{raw}' must name its minigame — "
+                            "the story has no challenge scope"
+                        )
+                        continue
+                    minigame_id = scope
+                elif minigame_id not in event_minigames:
+                    errors.append(
+                        f"{at}: placeholder '{raw}' names minigame '{minigame_id}', "
+                        "which no challenge in this event references"
+                    )
+                    continue
+
+                referenced = resolved.get(minigame_id)
+                if attribute != "port" or referenced is None:
+                    continue
+                declared = [p["port"] for p in referenced.get("tcp_ports", [])]
+                if not declared:
+                    errors.append(
+                        f"{at}: placeholder '{raw}' reads a port, but minigame "
+                        f"'{minigame_id}' declares no tcp_ports"
+                    )
+                elif container_port is None and len(declared) > 1:
+                    errors.append(
+                        f"{at}: placeholder '{raw}' is ambiguous — minigame "
+                        f"'{minigame_id}' declares container ports "
+                        f"{', '.join(str(p) for p in declared)}"
+                    )
+                elif container_port is not None and container_port not in declared:
+                    errors.append(
+                        f"{at}: placeholder '{raw}' names container port {container_port}, "
+                        f"which minigame '{minigame_id}' does not declare"
+                    )
+    return errors
+
+
 def validate_minigame(manifest: dict) -> list[str]:
     """Validate a parsed minigame.yaml: JSON Schema + intra-document checks.
 
@@ -207,6 +343,12 @@ def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> 
     `MinigameResolver`. Without one they are skipped and every other check
     still runs, because an author editing an `event.yaml` with no catalog
     at hand should still get the rest of the pipeline.
+
+    Check 13 validates the access placeholders in `story` and
+    `challenges[].text` (`_placeholder_errors`). It straddles the same line:
+    its grammar and event-scope half needs only this document, while the
+    part reading a referenced manifest's `tcp_ports` is skipped along with
+    checks 1-4 when no resolver is given.
     """
     errors = _schema_errors("event.schema.json", manifest)
     if errors:
@@ -245,6 +387,7 @@ def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> 
             elif produced[name] == c["id"]:
                 errors.append(f"challenges/{c['id']}: consumed reward '{name}' produced by itself")
 
+    resolved: dict[str, dict] = {}
     if resolver is not None:
         for c in challenges:
             ref = c["minigame"]
@@ -255,7 +398,10 @@ def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> 
                     "does not resolve to a manifest"
                 )
             else:
+                resolved[ref["id"]] = referenced
                 errors += _slot_errors(c, referenced)
+
+    errors += _placeholder_errors(manifest, challenges, resolved)
 
     cycle = _dependency_cycle(challenges, produced)
     if cycle:
