@@ -162,7 +162,7 @@ def test_manifest_without_optional_blocks_still_validates() -> None:
     # The intra-document checks must tolerate absent `tcp_ports`/`rewards`,
     # both optional per §2.1. `solve_mode: callback` is what makes dropping
     # `rewards` legal: under the default `flag` the manifest must declare the
-    # token slot it shows (§3.4 check 13).
+    # token slot it shows (§3.4 check 12).
     manifest = load("minigame_valid.yaml")
     del manifest["tcp_ports"]
     del manifest["rewards"]
@@ -188,9 +188,12 @@ def test_manifest_without_optional_blocks_still_validates() -> None:
 def test_declared_enum_values_are_accepted(field: str, values: list[str]) -> None:
     for value in values:
         manifest = load("minigame_valid.yaml")
-        # `shared`/`callback` are illegal beside tcp_ports (§3.4 checks 11-12),
-        # which is a separate rule from "the schema knows this field".
-        del manifest["tcp_ports"]
+        if field == "solve_mode":
+            # `callback` is illegal beside tcp_ports (§3.4 check 11), which is
+            # a separate rule from "the schema knows this field". Nothing
+            # constrains `isolation_mode` that way any more: `shared` is the
+            # default and is valid with or without a TCP tier.
+            del manifest["tcp_ports"]
         manifest[field] = value
         assert validate_minigame(manifest) == []
 
@@ -205,7 +208,7 @@ def test_unknown_enum_value_is_rejected(field: str) -> None:
 @pytest.mark.parametrize(
     ("field", "default"),
     [
-        ("isolation_mode", "per_team"),
+        ("isolation_mode", "shared"),
         ("provision_identity", "handles"),
         ("solve_mode", "flag"),
     ],
@@ -216,15 +219,18 @@ def test_schema_declares_the_contract_default(field: str, default: str) -> None:
     assert _minigame_schema()["properties"][field]["default"] == default
 
 
-# --- §3.4 checks 11-13 ------------------------------------------------------
+# --- §3.4 checks 11-12 ------------------------------------------------------
 
 
-def test_shared_isolation_with_tcp_ports_fails() -> None:
+def test_shared_isolation_with_tcp_ports_passes() -> None:
+    # ADR-0018: `shared` is the default and carries every game class, TCP tier
+    # included. What keeps teams apart after a solve is the contract rule that
+    # a minigame never grants players root — the escalation target is a
+    # per-team service account — and no manifest field can attest to that, so
+    # nothing here may reject the combination.
     manifest = load("minigame_valid.yaml")
     manifest["isolation_mode"] = "shared"
-    assert validate_minigame(manifest) == [
-        "isolation_mode: 'shared' is not allowed for a minigame declaring tcp_ports"
-    ]
+    assert validate_minigame(manifest) == []
 
 
 def test_shared_isolation_without_tcp_ports_passes() -> None:

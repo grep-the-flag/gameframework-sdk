@@ -153,16 +153,13 @@ def validate_minigame(manifest: dict) -> list[str]:
       between an event and this manifest, so one name bound to two types
       would make §3.4's reward-type check nondeterministic.
 
-    §3.4's checks 11-13 are here for the same reason — they read two fields
+    §3.4's checks 11-12 are here for the same reason — they read two fields
     of this one document against each other:
 
-    - check 11: `isolation_mode: shared` is rejected beside any
-      `tcp_ports`. A shared instance can only isolate teams in its own
-      application logic, which a raw TCP tier bypasses.
-    - check 12: `solve_mode: callback` is rejected beside any `tcp_ports`.
+    - check 11: `solve_mode: callback` is rejected beside any `tcp_ports`.
       A team shares one injected credential by design, so a callback from
       an SSH box cannot say which person earned it.
-    - check 13: `solve_mode: flag` (the default) requires at least one
+    - check 12: `solve_mode: flag` (the default) requires at least one
       `rewards.produces[]` slot of type `token` — the flag the game shows
       for the player to submit. Nothing else in the pipeline covers it: the
       flag is consumed by the *framework*, not by another challenge.
@@ -181,9 +178,6 @@ def validate_minigame(manifest: dict) -> list[str]:
     for slot in ("consumes", "produces"):
         names = [r["name"] for r in rewards.get(slot, [])]
         errors += [f"rewards/{slot}: duplicate reward name '{n}'" for n in _duplicates(names)]
-
-    if tcp_ports and manifest.get("isolation_mode", "per_team") == "shared":
-        errors.append("isolation_mode: 'shared' is not allowed for a minigame declaring tcp_ports")
 
     solve_mode = manifest.get("solve_mode", "flag")
     if tcp_ports and solve_mode == "callback":
