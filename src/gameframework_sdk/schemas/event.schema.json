@@ -7,13 +7,14 @@
   "required": ["schema_version", "contract", "id", "version", "name", "story", "scoring", "unlock_mode", "challenges"],
   "properties": {
     "schema_version": {"const": 1},
-    "contract": {"type": "string", "minLength": 1},
+    "contract": {"type": "string", "pattern": "^>=\\d+\\.\\d+,<\\d+\\.\\d+$", "description": "SDK contract version range, fixed grammar (sdk-contract-v1.md §2.1, decided 2026-08-07): exactly one comparator pair `>=A.B,<C.D`, no whitespace, bounds MAJOR.MINOR."},
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
     "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?(\\+[0-9A-Za-z-.]+)?$"},
     "name": {"$ref": "#/$defs/langMap"},
     "story": {"$ref": "#/$defs/langMap"},
     "scoring": {"enum": ["casual", "challenge"]},
     "unlock_mode": {"enum": ["manual", "guided"]},
+    "participation_mode": {"enum": ["teams", "solo"], "default": "teams", "description": "§3.1: `solo` models teams of one — the import creates one team per participant; nothing else in the document branches on it."},
     "theme": {"type": "string", "minLength": 1},
     "challenges": {
       "type": "array",
@@ -33,7 +34,7 @@
             "required": ["id", "version"],
             "properties": {
               "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
-              "version": {"type": "string", "minLength": 1}
+              "version": {"type": "string", "pattern": "^>=\\d+\\.\\d+,<\\d+\\.\\d+$", "description": "SemVer range over the referenced minigame's own version — same fixed range grammar as `contract` (§3.2), but a different axis."}
             }
           },
           "points": {"type": "integer", "minimum": 0},

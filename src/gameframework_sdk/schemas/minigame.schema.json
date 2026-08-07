@@ -7,7 +7,7 @@
   "required": ["schema_version", "contract", "id", "version", "name", "description", "image", "http", "resources"],
   "properties": {
     "schema_version": {"const": 1},
-    "contract": {"type": "string", "minLength": 1},
+    "contract": {"type": "string", "pattern": "^>=\\d+\\.\\d+,<\\d+\\.\\d+$", "description": "SDK contract version range, fixed grammar (sdk-contract-v1.md §2.1, decided 2026-08-07): exactly one comparator pair `>=A.B,<C.D`, no whitespace, bounds MAJOR.MINOR."},
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
     "version": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z-.]+)?(\\+[0-9A-Za-z-.]+)?$"},
     "name": {"$ref": "#/$defs/langMap"},

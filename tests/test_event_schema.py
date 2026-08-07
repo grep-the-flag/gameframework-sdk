@@ -187,9 +187,9 @@ def test_unresolvable_minigame_fails() -> None:
 
 
 def test_unsatisfied_version_range_fails() -> None:
-    # The resolver owns version-range matching (§2.1 leaves the comparator
-    # grammar open, §7); "no manifest satisfies this range" reaches the SDK as
-    # an unresolved reference.
+    # The resolver owns version-range matching (the schema enforces only the
+    # §2.1 range grammar); "no manifest satisfies this range" reaches the SDK
+    # as an unresolved reference.
     manifest = load("event_valid.yaml")
     manifest["challenges"][0]["minigame"]["version"] = ">=9.0,<10.0"
     assert validate_event(manifest, resolver=resolver(WRITABLE_CRON_JOB)) == [
@@ -255,4 +255,32 @@ def test_yaml_norwegian_language_key_is_rejected() -> None:
     manifest = load("event_valid.yaml")
     manifest["name"] = yaml.safe_load("name: {no: Nei}")["name"]
     assert list(manifest["name"]) == [False]  # the bug this guards against
+    assert validate_event(manifest) != []
+
+
+def test_contract_range_grammar_is_enforced() -> None:
+    # §2.1 fixed grammar (decided 2026-08-07): exactly one comparator pair
+    # `>=A.B,<C.D` — lower bound, comma, upper bound, no whitespace, bounds
+    # MAJOR.MINOR. The schema is what makes the contract's "enforced in CI"
+    # claim true.
+    manifest = load("event_valid.yaml")
+    for bad in (">=0.1", ">= 0.1,<1.0", "^1.0", ">=0.1.0,<1.0.0", "*"):
+        manifest["contract"] = bad
+        assert validate_event(manifest) != [], bad
+
+
+def test_minigame_version_range_uses_the_same_grammar() -> None:
+    # §3.2: challenges[].minigame.version shares the §2.1 range grammar —
+    # an exact version is not a range.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][0]["minigame"]["version"] = "1.0.0"
+    assert validate_event(manifest) != []
+
+
+def test_participation_mode_is_an_optional_enum() -> None:
+    # §3.1: optional, default `teams`; `solo` models teams of one.
+    manifest = load("event_valid.yaml")
+    manifest["participation_mode"] = "solo"
+    assert validate_event(manifest) == []
+    manifest["participation_mode"] = "duo"
     assert validate_event(manifest) != []

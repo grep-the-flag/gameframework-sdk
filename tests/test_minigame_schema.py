@@ -284,3 +284,12 @@ def test_yaml_norwegian_language_key_is_rejected() -> None:
     manifest["name"] = yaml.safe_load("name: {no: Nei}")["name"]
     assert list(manifest["name"]) == [False]  # the bug this guards against
     assert validate_minigame(manifest) != []
+
+
+def test_contract_range_grammar_is_enforced() -> None:
+    # §2.1 fixed grammar (decided 2026-08-07): exactly one comparator pair
+    # `>=A.B,<C.D` — no whitespace, no other comparators, bounds MAJOR.MINOR.
+    manifest = load("minigame_valid.yaml")
+    for bad in (">=0.1", ">= 0.1,<1.0", "^1.0", ">=0.1.0,<1.0.0", "*"):
+        manifest["contract"] = bad
+        assert validate_minigame(manifest) != [], bad
