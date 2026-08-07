@@ -22,9 +22,10 @@ class MinigameResolver(Protocol):
 
         Returns `None` when the source holds no such manifest — either the
         id is unknown or no version of it satisfies the range. **The
-        resolver owns version-range matching**: §2.1 leaves the comparator
-        grammar unfixed for this draft (§7), and the source that knows which
-        versions exist is the one that can answer the question.
+        resolver owns version-range matching**: the schemas enforce the
+        fixed range grammar `>=A.B,<C.D` (§2.1, decided 2026-08-07), but
+        whether any existing version satisfies the range is a question only
+        the source that knows which versions exist can answer.
         """
 
 
