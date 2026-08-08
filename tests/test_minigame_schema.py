@@ -180,7 +180,7 @@ def test_manifest_without_optional_blocks_still_validates() -> None:
 @pytest.mark.parametrize(
     ("field", "values"),
     [
-        ("isolation_mode", ["per_team", "shared"]),
+        ("isolation_mode", ["shared"]),
         ("provision_identity", ["handles", "names"]),
         ("solve_mode", ["flag", "callback"]),
     ],
@@ -203,6 +203,15 @@ def test_unknown_enum_value_is_rejected(field: str) -> None:
     manifest = load("minigame_valid.yaml")
     manifest[field] = "whatever"
     assert any(field in e for e in validate_minigame(manifest))
+
+
+def test_per_team_isolation_mode_is_rejected() -> None:
+    # §2.1: `shared` is the only value in v1 — the field is kept so a per-team
+    # mode can be added post-v1 as a new enum value without a schema_version
+    # bump, but a manifest declaring anything but `shared` is rejected today.
+    manifest = load("minigame_valid.yaml")
+    manifest["isolation_mode"] = "per_team"
+    assert any("isolation_mode" in e for e in validate_minigame(manifest))
 
 
 @pytest.mark.parametrize(
@@ -273,6 +282,31 @@ def test_callback_solve_mode_needs_no_token_produces_slot() -> None:
     manifest["solve_mode"] = "callback"
     manifest["rewards"]["produces"] = [{"name": "cron_flag_token", "type": "password"}]
     assert validate_minigame(manifest) == []
+
+
+def test_second_token_produces_slot_is_rejected() -> None:
+    # §2.1 / §3.4 check 12, the schema half: at most one produces slot of type
+    # `token` — a minigame has one flag or none. Two wired token slots would
+    # leave POST /challenges/{id}/flag without a defined value to compare.
+    manifest = load("minigame_valid.yaml")
+    manifest["rewards"]["produces"] = [
+        {"name": "cron_flag_token", "type": "token"},
+        {"name": "second_flag", "type": "token"},
+    ]
+    assert any("produces" in e for e in validate_minigame(manifest))
+
+
+def test_token_cap_holds_for_callback_games_too() -> None:
+    # §3.4 check 12: "at most one token slot" is manifest-level and holds for
+    # callback games as well, although they show no flag themselves.
+    manifest = load("minigame_valid.yaml")
+    del manifest["tcp_ports"]
+    manifest["solve_mode"] = "callback"
+    manifest["rewards"]["produces"] = [
+        {"name": "cron_flag_token", "type": "token"},
+        {"name": "second_flag", "type": "token"},
+    ]
+    assert any("produces" in e for e in validate_minigame(manifest))
 
 
 def test_yaml_norwegian_language_key_is_rejected() -> None:
