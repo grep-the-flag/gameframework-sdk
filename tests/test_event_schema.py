@@ -135,6 +135,10 @@ def test_self_dependency_is_not_also_reported_as_a_cycle() -> None:
 SLIDE_PUZZLE = {
     "id": "slide-puzzle",
     "version": "1.2.0",
+    # §8.1: solved by *finishing* it — nothing to paste. Also what makes
+    # leaving its token slot unwired legal: the "wire the flag token" half of
+    # §3.4 check 12 applies to `flag` games only.
+    "solve_mode": "callback",
     "rewards": {
         "consumes": [],
         "produces": [
@@ -284,3 +288,93 @@ def test_participation_mode_is_an_optional_enum() -> None:
     assert validate_event(manifest) == []
     manifest["participation_mode"] = "duo"
     assert validate_event(manifest) != []
+
+
+# --- §3.2 / §3.4 check 14: `challenges[].minigame.host_label` ----------------
+#
+# The DNS label a game's HTTP tier is published under — an event-authoring
+# field, deliberately not a manifest field. Optional, defaulting to the
+# minigame id; check 14 runs over the *effective* labels (after defaulting):
+# unique within the event, and none of the installation's reserved labels.
+# The reserved list is caller-supplied installation configuration; `callback`
+# (the callback ingress of §4.3) is the contract's floor and always refused.
+
+
+def test_host_label_is_accepted() -> None:
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][0]["minigame"]["host_label"] = "ahab"
+    assert validate_event(manifest) == []
+
+
+def test_host_label_grammar_is_enforced() -> None:
+    # Same slug grammar as an id (§3.2).
+    manifest = load("event_valid.yaml")
+    for bad in ("Ahab", "-ahab", "a", "ahab.cabin"):
+        manifest["challenges"][0]["minigame"]["host_label"] = bad
+        assert validate_event(manifest) != [], bad
+
+
+def test_duplicate_effective_host_labels_fail() -> None:
+    # An explicit label may not collide with another challenge's defaulted
+    # minigame id either — uniqueness is checked after defaulting.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][0]["minigame"]["host_label"] = "writable-cron-job"
+    assert validate_event(manifest) == [
+        "challenges: duplicate host label 'writable-cron-job'"
+    ]
+
+
+def test_duplicate_minigame_id_is_not_also_a_duplicate_label() -> None:
+    # Two challenges sharing a minigame id share its defaulted label too;
+    # check 9 already names that mistake, so check 14 stays quiet about it.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][1]["minigame"]["id"] = "slide-puzzle"
+    assert validate_event(manifest) == ["challenges: duplicate minigame id 'slide-puzzle'"]
+
+
+def test_callback_host_label_is_always_reserved() -> None:
+    # The callback ingress lives at callback.<event_domain> (§4.3); a game
+    # shadowing it would swallow every solve report. Refused with no
+    # installation list supplied at all.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][0]["minigame"]["host_label"] = "callback"
+    assert validate_event(manifest) == [
+        "challenges/entry: host label 'callback' is reserved by the installation"
+    ]
+
+
+def test_installation_reserved_host_labels_are_refused() -> None:
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][0]["minigame"]["host_label"] = "play"
+    assert validate_event(manifest, reserved_host_labels={"play"}) == [
+        "challenges/entry: host label 'play' is reserved by the installation"
+    ]
+
+
+def test_reserved_list_catches_defaulted_labels_too() -> None:
+    # The defaulted label (the minigame id) goes through the same check.
+    manifest = load("event_valid.yaml")
+    assert validate_event(manifest, reserved_host_labels={"writable-cron-job"}) == [
+        "challenges/escalate: host label 'writable-cron-job' is reserved by the installation"
+    ]
+
+
+# --- §3.4 check 12, the event half: a `flag` game's token slot must be wired.
+
+
+def test_flag_token_slot_must_be_wired() -> None:
+    # writable-cron-job declares no solve_mode, so the default `flag` applies:
+    # its one token produces slot is the flag the game shows, and an event
+    # that leaves it unwired ships a game whose solve nobody can submit.
+    manifest = load("event_valid.yaml")
+    manifest["challenges"][1]["rewards"]["produces"] = []
+    assert validate_event(manifest, resolver=resolver()) == [
+        "challenges/escalate: minigame 'writable-cron-job' declares solve_mode "
+        "'flag' but its token slot 'cron_flag_token' is not wired"
+    ]
+
+
+def test_callback_game_token_slot_may_stay_unwired() -> None:
+    # slide-puzzle is a callback game (§8.1): its token slot exists for other
+    # events to use, and leaving it unwired is the fixture's documented state.
+    assert validate_event(load("event_valid.yaml"), resolver=resolver()) == []
