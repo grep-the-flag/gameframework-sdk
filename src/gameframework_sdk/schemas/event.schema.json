@@ -34,7 +34,8 @@
             "required": ["id", "version"],
             "properties": {
               "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
-              "version": {"type": "string", "pattern": "^>=\\d+\\.\\d+,<\\d+\\.\\d+$", "description": "SemVer range over the referenced minigame's own version — same fixed range grammar as `contract` (§3.2), but a different axis."}
+              "version": {"type": "string", "pattern": "^>=\\d+\\.\\d+,<\\d+\\.\\d+$", "description": "SemVer range over the referenced minigame's own version — same fixed range grammar as `contract` (§3.2), but a different axis."},
+              "host_label": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$", "description": "§3.2: the DNS label this game's HTTP tier is published under (`<host_label>.<event_domain>`). Optional, defaulting to the minigame id — an event-authoring field, deliberately not a manifest field: the label belongs to the story. Same slug grammar as an id; unique within the event over the *effective* labels (after defaulting) and none of the installation's reserved host labels, `callback` always among them (§3.4 check 14). Never rendered to players."}
             }
           },
           "points": {"type": "integer", "minimum": 0},

@@ -1,8 +1,17 @@
 import json
+from collections.abc import Collection
 from importlib.resources import files
 from typing import Protocol
 
 from jsonschema import Draft202012Validator
+
+# §3.4 check 14: the floor of the installation's reserved host labels, fixed
+# by the contract itself — the callback ingress lives at
+# `callback.<event_domain>` (§4.3), so a minigame publishing under that label
+# would shadow the solve channel on any installation. The rest of the list is
+# installation configuration and reaches `validate_event` through its caller,
+# the same way referenced manifests reach it through the resolver.
+RESERVED_HOST_LABELS = frozenset({"callback"})
 
 
 class MinigameResolver(Protocol):
@@ -50,14 +59,19 @@ def _duplicates(items) -> list:
 
 
 def _slot_errors(challenge: dict, minigame: dict) -> list[str]:
-    """§3.4 checks 2-4: the event's wiring against the manifest's slots.
+    """§3.4 checks 2-4, plus the event half of check 12.
 
     The manifest owns the reward names in both directions (§2.1), so this
     reads as "does the event speak the minigame's vocabulary": every wired
     name must be a slot the manifest declares, every `consumes` slot must be
     wired (§3.2), and a wired `produces` type must equal the declared one.
     The converse of check 3 is deliberately absent — a `produces` slot the
-    event leaves unwired is legal and simply unused.
+    event leaves unwired is legal and simply unused — with one exception:
+    a `flag` game's token slot (check 12). Under `solve_mode: flag` (the
+    default) that slot is the flag the game shows, and the framework, not
+    another challenge, is what consumes it — so check 5 never notices it
+    missing, and an event that leaves it unwired ships a game whose solve
+    nobody can submit.
     """
     cid, mid = challenge["id"], minigame["id"]
     wiring = challenge.get("rewards", {})
@@ -86,6 +100,15 @@ def _slot_errors(challenge: dict, minigame: dict) -> list[str]:
             errors.append(
                 f"challenges/{cid}: produced reward '{r['name']}' has type '{r['type']}', "
                 f"minigame '{mid}' declares '{produces[r['name']]}'"
+            )
+
+    if minigame.get("solve_mode", "flag") == "flag":
+        token_slot = next((n for n, t in produces.items() if t == "token"), None)
+        wired_produces = {r["name"] for r in wiring.get("produces", [])}
+        if token_slot is not None and token_slot not in wired_produces:
+            errors.append(
+                f"challenges/{cid}: minigame '{mid}' declares solve_mode 'flag' "
+                f"but its token slot '{token_slot}' is not wired"
             )
     return errors
 
@@ -191,7 +214,11 @@ def validate_minigame(manifest: dict) -> list[str]:
     return errors
 
 
-def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> list[str]:
+def validate_event(
+    manifest: dict,
+    resolver: MinigameResolver | None = None,
+    reserved_host_labels: Collection[str] = (),
+) -> list[str]:
     """Validate a parsed event.yaml: JSON Schema + referential checks.
 
     Cycle detection over the combined explicit and reward-derived
@@ -208,6 +235,15 @@ def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> 
     `MinigameResolver`. Without one they are skipped and every other check
     still runs, because an author editing an `event.yaml` with no catalog
     at hand should still get the rest of the pipeline.
+
+    Check 14 (host labels) runs over the *effective* labels — an explicit
+    `host_label` or the `minigame.id` default (§3.2): unique within the
+    event, and none of the installation's reserved labels. The reserved
+    list is installation configuration handed in by the caller like the
+    resolver is; `RESERVED_HOST_LABELS` is the contract's floor and is
+    refused with or without a caller-supplied list. Two challenges sharing
+    a minigame id share its defaulted label too — check 9 already names
+    that mistake, so it is not reported again as a duplicate label.
     """
     errors = _schema_errors("event.schema.json", manifest)
     if errors:
@@ -219,9 +255,20 @@ def validate_event(manifest: dict, resolver: MinigameResolver | None = None) -> 
     errors += [
         f"challenges: duplicate order {o}" for o in _duplicates(c["order"] for c in challenges)
     ]
+    duplicate_minigame_ids = _duplicates(c["minigame"]["id"] for c in challenges)
+    errors += [f"challenges: duplicate minigame id '{m}'" for m in duplicate_minigame_ids]
+
+    labels = {c["id"]: c["minigame"].get("host_label", c["minigame"]["id"]) for c in challenges}
     errors += [
-        f"challenges: duplicate minigame id '{m}'"
-        for m in _duplicates(c["minigame"]["id"] for c in challenges)
+        f"challenges: duplicate host label '{label}'"
+        for label in _duplicates(labels.values())
+        if label not in duplicate_minigame_ids
+    ]
+    reserved = RESERVED_HOST_LABELS.union(reserved_host_labels)
+    errors += [
+        f"challenges/{cid}: host label '{label}' is reserved by the installation"
+        for cid, label in labels.items()
+        if label in reserved
     ]
 
     produced: dict[str, str] = {}

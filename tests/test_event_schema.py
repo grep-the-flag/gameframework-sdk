@@ -319,9 +319,7 @@ def test_duplicate_effective_host_labels_fail() -> None:
     # minigame id either — uniqueness is checked after defaulting.
     manifest = load("event_valid.yaml")
     manifest["challenges"][0]["minigame"]["host_label"] = "writable-cron-job"
-    assert validate_event(manifest) == [
-        "challenges: duplicate host label 'writable-cron-job'"
-    ]
+    assert validate_event(manifest) == ["challenges: duplicate host label 'writable-cron-job'"]
 
 
 def test_duplicate_minigame_id_is_not_also_a_duplicate_label() -> None:

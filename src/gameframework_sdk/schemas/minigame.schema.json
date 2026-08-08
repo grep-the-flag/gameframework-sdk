@@ -14,8 +14,8 @@
     "description": {"$ref": "#/$defs/langMap"},
     "image": {"$ref": "#/$defs/ociImageRef"},
     "isolation_mode": {
-      "description": "§2.1 (ADR-0018): `shared` = one container instance per minigame per event, started at event bootstrap, shared by all teams, decommissioned at event end; the framework provisions each team's players onto the running instance at challenge start and removes them at teardown. `per_team` = one container instance per team, created at that team's challenge start and removed at its teardown - an opt-in for a game that wants a kernel boundary per team, never required of any game class. Sharing is safe because a minigame must never grant a player root: an escalation game's target is that team's own service account (svc-<team_handle>), never root and never one service account shared by all teams. That rule, and the hardening obligations that go with it, are verified by registry admission review and the contract test suite, not by this schema. The contract endpoints are identical in both modes.",
-      "enum": ["per_team", "shared"],
+      "description": "§2.1 (ADR-0018): `shared` is the only value in v1 - one container instance per minigame per event, started at event bootstrap, shared by all teams, decommissioned at event end; the framework provisions each team's players onto the running instance at challenge start and removes them at teardown. Sharing is safe because a minigame must never grant a player root: an escalation game's target is that team's own service account (svc-<team_handle>), never root and never one service account shared by all teams. That rule, and the hardening obligations that go with it, are verified by registry admission review and the contract test suite, not by this schema. The field is kept although it has one legal value, so that a per-team instance mode can be added post-v1 as a new enum value without a schema_version bump; a manifest declaring anything else is rejected today.",
+      "enum": ["shared"],
       "default": "shared"
     },
     "provision_identity": {
@@ -52,7 +52,14 @@
       "additionalProperties": false,
       "properties": {
         "consumes": {"type": "array", "items": {"$ref": "#/$defs/rewardDecl"}},
-        "produces": {"type": "array", "items": {"$ref": "#/$defs/rewardDecl"}}
+        "produces": {
+          "description": "at most one slot of type `token` - a minigame has one flag or none (§2.1, the schema half of §3.4 check 12); holds for callback games too",
+          "type": "array",
+          "items": {"$ref": "#/$defs/rewardDecl"},
+          "contains": {"type": "object", "properties": {"type": {"const": "token"}}, "required": ["type"]},
+          "minContains": 0,
+          "maxContains": 1
+        }
       }
     },
     "resources": {
